@@ -28,7 +28,7 @@ Optional: pick a fast model and the languages you speak:
 hermes bubble install --provider anthropic --model claude-haiku-4-5 --languages en,fr,ar
 # or later:
 hermes bubble config provider=openrouter model=openai/gpt-5-mini languages=en,es
-hermes bubble config 'tts_voices={"fr": "fr-FR-HenriNeural"}'   # pick a different voice per language
+hermes bubble config 'tts_voices={"fr": "fr-FR-HenriNeural"}'   # pick a different voice per language (see Voices)
 hermes bubble restart
 ```
 
@@ -60,7 +60,8 @@ hermes bubble restart
             1. record until you pause  →  2. local Whisper (restricted to your languages)
             3. instant ⚡ commands (regex)  — or —  Hermes API server (your model, web + screen tools)
                └─ the model can reply `ACTION {...}` to trigger a bubble action
-            4. text-to-speech, first sentence first (Hermes' TTS, macOS `say` fallback)
+            4. text-to-speech in a native voice for the detected language, first sentence first
+               (Microsoft Edge voices, macOS `say` voice for the same language as fallback)
 ```
 
 Note: the runtime uses a few internal Hermes modules (voice, TTS, web search); a Hermes release may occasionally require a plugin update.
@@ -68,6 +69,25 @@ Note: the runtime uses a few internal Hermes modules (voice, TTS, web search); a
 Safety model: the bubble's prompt tells the agent it may **look** (screen, web) but must never click or type, and to request one of the fixed actions in `runtime/actions.py` instead, which run outside the agent's tools. This is a prompt rule, not a sandbox: `computer_use` stays fully enabled for the API server, so a web page or on-screen text written to mislead the model could still make it act. Keep that in mind when you ask it to read untrusted content.
 
 Conversations: one Hermes session per bubble conversation; a new one starts when you click ✕, after 10 minutes of silence, or after 30 turns. The worker restarts itself every 6 h (when idle) and HermesKey respawns it if it dies.
+
+## Voices
+
+Hermes answers in the language you spoke, with a native voice for that language, so French is not read with an English accent.
+
+| Language | Default voice | Fallback (offline / slow network) |
+|---|---|---|
+| French | `fr-FR-DeniseNeural` (female) | best installed macOS French voice, e.g. Aurélie |
+| English | `en-US-ChristopherNeural` (male) | best installed macOS English voice, e.g. Evan |
+| Arabic | `ar-MA-JamalNeural` (male) | best installed macOS Arabic voice, e.g. Majed |
+
+Spanish, German, Italian, Portuguese, Dutch, Turkish, Russian, Japanese, Chinese, Hindi, Korean and Polish have defaults too. Change any of them:
+
+```bash
+hermes bubble config 'tts_voices={"fr": "fr-FR-HenriNeural", "en": "en-GB-RyanNeural"}'
+hermes bubble restart
+```
+
+Voice names come from `edge-tts --list-voices`. If you set a non-Edge TTS provider in Hermes (`tts.provider`), the bubble uses that provider and its voice instead. Better macOS fallback voices can be downloaded in System Settings > Accessibility > Spoken Content > System Voice > Manage Voices.
 
 ## Manage
 
@@ -85,6 +105,7 @@ Logs: `~/.hermes/bubble/ask.log` (turns + timings), `~/.hermes/bubble/fnkey.log`
 
 - Speech-to-text runs **locally** (faster-whisper). Audio is never uploaded.
 - What you say is sent to **your** configured Hermes model, like any Hermes chat.
+- Spoken answers (the text, not your voice) are sent to Microsoft's Edge text-to-speech service, unless you configured another TTS provider in Hermes.
 - The key listener only watches the 🌐 key's press/release (read-only event tap). It never records other keystrokes.
 - History search reads your local Chrome `History` file on demand; nothing is copied elsewhere.
 - Spotify searches and the model's web answers go through Hermes' web search provider. YouTube searches are fetched from youtube.com directly, without your account.
