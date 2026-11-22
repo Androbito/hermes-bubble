@@ -431,7 +431,7 @@ TTS_FIRST_CHUNK_TIMEOUT = 5.0   # the first request also opens the connection, g
 # Native Edge voice per language. A single "multilingual" English voice reads French or Arabic
 # with an English accent, so the bubble picks a voice that matches the language it heard.
 EDGE_VOICES = {
-    "en": "en-US-AndrewMultilingualNeural", "fr": "fr-FR-HenriNeural", "ar": "ar-MA-JamalNeural",
+    "en": "en-US-AndrewMultilingualNeural", "fr": "fr-FR-DeniseNeural", "ar": "ar-MA-JamalNeural",
     "es": "es-ES-AlvaroNeural", "de": "de-DE-ConradNeural", "it": "it-IT-DiegoNeural",
     "pt": "pt-BR-AntonioNeural", "nl": "nl-NL-MaartenNeural", "tr": "tr-TR-AhmetNeural",
     "ru": "ru-RU-DmitryNeural", "ja": "ja-JP-KeitaNeural", "zh": "zh-CN-YunxiNeural",

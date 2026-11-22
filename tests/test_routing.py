@@ -192,7 +192,7 @@ def test_spoken_language_picks_native_voice(monkeypatch):
     import types
     fake_cfg = types.SimpleNamespace(load_config=lambda: {"tts": {"provider": "edge"}})
     monkeypatch.setitem(sys.modules, "hermes_cli.config", fake_cfg)
-    assert ask.edge_voice("fr") == "fr-FR-HenriNeural"
+    assert ask.edge_voice("fr") == "fr-FR-DeniseNeural"
     assert ask.edge_voice("es") == "es-MX-JorgeNeural"          # user override wins
     fake_cfg.load_config = lambda: {"tts": {"provider": "elevenlabs"}}
     assert ask.edge_voice("fr") is None                         # other providers are left alone

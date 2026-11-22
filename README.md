@@ -28,7 +28,7 @@ Optional: pick a fast model and the languages you speak:
 hermes bubble install --provider anthropic --model claude-haiku-4-5 --languages en,fr,ar
 # or later:
 hermes bubble config provider=openrouter model=openai/gpt-5-mini languages=en,es
-hermes bubble config 'tts_voices={"fr": "fr-FR-DeniseNeural"}'   # pick a different voice per language
+hermes bubble config 'tts_voices={"fr": "fr-FR-HenriNeural"}'   # pick a different voice per language
 hermes bubble restart
 ```
 
