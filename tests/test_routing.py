@@ -182,3 +182,37 @@ def test_volume_explains_when_nothing_can_be_controlled(monkeypatch):
     monkeypatch.setattr(actions.subprocess, "run", _Osa())
     monkeypatch.setattr(actions, "spotify_running", lambda: False)
     assert "doesn't let the Mac change its volume" in actions.volume("set", "en", 40)
+
+
+def test_spoken_language_picks_native_voice(monkeypatch):
+    monkeypatch.setattr(ask, "LAST_LANG", "fr")
+    assert ask.spoken_lang("La capitale est Ottawa.") == "fr"
+    assert ask.spoken_lang("عاصمة كندا هي أوتاوا.") == "ar"
+    monkeypatch.setattr(ask, "CFG", {**ask.CFG, "tts_voices": {"es": "es-MX-JorgeNeural"}})
+    import types
+    fake_cfg = types.SimpleNamespace(load_config=lambda: {"tts": {"provider": "edge"}})
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", fake_cfg)
+    assert ask.edge_voice("fr") == "fr-FR-HenriNeural"
+    assert ask.edge_voice("es") == "es-MX-JorgeNeural"          # user override wins
+    fake_cfg.load_config = lambda: {"tts": {"provider": "elevenlabs"}}
+    assert ask.edge_voice("fr") is None                         # other providers are left alone
+
+
+def test_say_fallback_uses_a_voice_for_the_language(monkeypatch):
+    listing = ("Albert              en_US    # Hello! My name is Albert.\n"
+               "Aurélie (Enhanced)  fr_FR    # Bonjour, je m'appelle Aurélie.\n"
+               "Amélie              fr_CA    # Bonjour! Je m'appelle Amélie.\n"
+               "Majed (Premium)     ar_001   # مرحبًا! اسمي ماجد.\n")
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return type("R", (), {"stdout": listing if cmd[:3] == ["say", "-v", "?"] else ""})()
+    monkeypatch.setattr(ask.subprocess, "run", fake_run)
+    monkeypatch.setattr(ask, "_SAY_VOICES", {})
+    ask.say_fallback("Bonjour", "fr")
+    ask.say_fallback("مرحبا", "ar")
+    ask.say_fallback("Hallo", "de")
+    spoken = [c for c in calls if c[:3] != ["say", "-v", "?"]]
+    assert spoken == [["say", "-v", "Aurélie (Enhanced)", "Bonjour"], ["say", "-v", "Majed (Premium)", "مرحبا"],
+                      ["say", "Hallo"]]

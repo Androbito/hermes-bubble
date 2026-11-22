@@ -63,6 +63,10 @@ Commands marked ⚡ run instantly without asking the AI. The others go through y
 
 ---
 
+## 🗣️ Voices
+
+Hermes answers with a native voice for the language you spoke (French, English, Arabic, Spanish, German and more), so French is never read with an English accent. If the online voice is slow or offline, the Mac's own voice for that language takes over (install better ones in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices).
+
 ## Limits
 
 - **No free clicking or typing.** Hermes only performs the actions listed above. Anything else that would change your Mac (delete, send messages, install…) has to be done from your normal Hermes chat or Terminal.

@@ -426,6 +426,78 @@ def _split_sentences(text, max_chunk=220):
 
 
 TTS_CHUNK_TIMEOUT = 3.5   # online voice slower than this → speak that chunk with macOS `say`
+TTS_FIRST_CHUNK_TIMEOUT = 5.0   # the first request also opens the connection, give it a bit longer
+
+# Native Edge voice per language. A single "multilingual" English voice reads French or Arabic
+# with an English accent, so the bubble picks a voice that matches the language it heard.
+EDGE_VOICES = {
+    "en": "en-US-AndrewMultilingualNeural", "fr": "fr-FR-HenriNeural", "ar": "ar-MA-JamalNeural",
+    "es": "es-ES-AlvaroNeural", "de": "de-DE-ConradNeural", "it": "it-IT-DiegoNeural",
+    "pt": "pt-BR-AntonioNeural", "nl": "nl-NL-MaartenNeural", "tr": "tr-TR-AhmetNeural",
+    "ru": "ru-RU-DmitryNeural", "ja": "ja-JP-KeitaNeural", "zh": "zh-CN-YunxiNeural",
+    "hi": "hi-IN-MadhurNeural", "ko": "ko-KR-InJoonNeural", "pl": "pl-PL-MarekNeural",
+}
+_ARABIC = re.compile(r"[\u0600-\u06FF]")
+
+
+def spoken_lang(text):
+    """Language to speak `text` in: Arabic script wins, otherwise the language the user just spoke."""
+    if _ARABIC.search(text or "") and len(_ARABIC.findall(text)) > len(text) / 4:
+        return "ar"
+    return LAST_LANG
+
+
+def edge_voice(lang):
+    """Edge voice for `lang`, or None to let Hermes' own TTS settings decide."""
+    try:
+        from hermes_cli.config import load_config
+        tts_cfg = load_config().get("tts") or {}
+    except Exception:
+        tts_cfg = {}
+    if (tts_cfg.get("provider") or "edge").lower() != "edge":
+        return None   # the user picked another TTS provider in Hermes; respect it
+    overrides = CFG.get("tts_voices") or {}
+    return overrides.get(lang) or EDGE_VOICES.get(lang)
+
+
+_SAY_VOICES = {}
+
+
+def say_voice(lang):
+    """Best installed macOS voice for `lang` (Premium > Enhanced > standard), or None."""
+    if lang in _SAY_VOICES:
+        return _SAY_VOICES[lang]
+    best, rank = None, -1
+    try:
+        out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    for line in out.splitlines():
+        m = re.match(r"^(.+?)\s+([a-z]{2,3})_(\w+)\s+#", line)
+        if not m or m.group(2) != lang:
+            continue
+        name = m.group(1).strip()
+        r = (2 if "Premium" in name else 1 if "Enhanced" in name else 0) * 10
+        r += 5 if m.group(3) in ("FR", "US", "001", "ES", "DE", "IT", "BR") else 0
+        r -= 20 if re.search(r"Eddy|Flo|Grand|Reed|Rocko|Sandy|Shelley", name) else 0   # novelty-ish voices
+        if r > rank:
+            best, rank = name, r
+    _SAY_VOICES[lang] = best
+    return best
+
+
+def _edge_synth(text, out, voice):
+    import asyncio
+    import edge_tts
+    asyncio.run(edge_tts.Communicate(text, voice=voice).save(out))
+    if not os.path.getsize(out):
+        raise RuntimeError("empty audio")
+    return {"success": True, "file_path": out}
+
+
+def say_fallback(text, lang):
+    v = say_voice(lang)
+    subprocess.run(["say", "-v", v, text] if v else ["say", text])
 
 
 def speak(vm, tts, text, cancelled):
@@ -437,6 +509,8 @@ def speak(vm, tts, text, cancelled):
         pass
     import queue
     chunks = _split_sentences(text)
+    lang = spoken_lang(text)
+    voice = edge_voice(lang)
     q = queue.Queue()
     t0 = time.monotonic()
 
@@ -448,13 +522,20 @@ def speak(vm, tts, text, cancelled):
             box = {}
             def job(chunk=chunk, out=out, box=box):
                 try:
+                    if voice:
+                        try:
+                            box["r"] = _edge_synth(chunk, out, voice)
+                            return
+                        except Exception as e:   # bad/retired voice name → Hermes' configured voice
+                            log(f"edge voice {voice} failed ({str(e)[:80]}); trying Hermes TTS")
                     box["r"] = json.loads(tts(text=chunk, output_path=out))
                 except Exception as e:
                     box["r"] = {"success": False, "error": str(e)}
+            limit = TTS_FIRST_CHUNK_TIMEOUT if i == 0 else TTS_CHUNK_TIMEOUT
             th = threading.Thread(target=job, daemon=True)
             th.start()
-            th.join(TTS_CHUNK_TIMEOUT)
-            r = box.get("r") or {"success": False, "error": f"online voice slower than {TTS_CHUNK_TIMEOUT}s"}
+            th.join(limit)
+            r = box.get("r") or {"success": False, "error": f"online voice slower than {limit}s"}
             q.put((chunk, r, out))
         q.put(None)
 
@@ -466,7 +547,8 @@ def speak(vm, tts, text, cancelled):
             break
         chunk, r, out = item
         if first:
-            log(f"timing: tts first audio {time.monotonic() - t0:.1f}s ({len(chunks)} chunk(s))")
+            log(f"timing: tts first audio {time.monotonic() - t0:.1f}s ({len(chunks)} chunk(s), "
+                f"lang={lang}, voice={voice or 'hermes default'})")
             set_state("speaking", text=shown)
             first = False
         paths = r.get("file_paths") or [r.get("file_path") or out]
@@ -481,7 +563,7 @@ def speak(vm, tts, text, cancelled):
             # the Mac's built-in voice so the answer is still spoken.
             log(f"tts failed ({str(r.get('error'))[:120]}); using macOS say")
             if not cancelled.is_set():
-                subprocess.run(["say", chunk])
+                say_fallback(chunk, lang)
         for p in set(paths + [out, out.rsplit(".", 1)[0] + ".ogg"]):
             try:
                 os.unlink(p)

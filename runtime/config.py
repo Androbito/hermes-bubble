@@ -28,6 +28,7 @@ DEFAULTS = {
     "browser_app": "Google Chrome",
     "browser_profile": "Default",  # Chrome profile directory used for searches/YouTube/history
     "api_url": "http://127.0.0.1:8642/v1/chat/completions",
+    "tts_voices": {},              # per-language Edge voice overrides, e.g. {"fr": "fr-FR-DeniseNeural"}
     "max_turns": 30,               # a voice conversation restarts after this many turns
     "idle_reset_minutes": 10,      # ...or after this long without talking
     "hermes_bin": "",              # filled in by the installer

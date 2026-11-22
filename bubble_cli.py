@@ -366,7 +366,14 @@ def cmd_config(args):
         if k not in bubble_config.DEFAULTS:
             raise SystemExit(f"unknown setting {k!r}; known: {', '.join(bubble_config.DEFAULTS)}")
         default = bubble_config.DEFAULTS[k]
-        if isinstance(default, list):
+        if isinstance(default, dict):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                raise SystemExit(f"{k} needs JSON, e.g. {k}='{{\"fr\": \"fr-FR-DeniseNeural\"}}'")
+            if not isinstance(v, dict):
+                raise SystemExit(f"{k} needs a JSON object")
+        elif isinstance(default, list):
             v = [x.strip() for x in v.split(",") if x.strip()]
         elif isinstance(default, bool):
             v = v.lower() in ("1", "true", "yes")
