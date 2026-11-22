@@ -45,7 +45,7 @@ hermes bubble restart
 | Voice stack | installs Hermes' `voice` extra (faster-whisper local speech-to-text, sounddevice) |
 | Settings | `~/.hermes/bubble/config.json` — model, languages, browser profile, timings |
 | API server | adds `API_SERVER_ENABLED` + a random `API_SERVER_KEY` to `~/.hermes/.env` (127.0.0.1 only, asks first) so answers come from the running gateway (~2–4 s) instead of spawning a CLI per question |
-| Tools | enables `web` + `computer_use` for the API server so the bubble can search the web and read the screen |
+| Tools | enables `web` + `computer_use` for the API server **and for the CLI** (the fallback path when the API server is down) so the bubble can search the web and read the screen. This changes what your normal `hermes` CLI can do too |
 | App | builds and signs `~/.hermes/bubble/HermesKey.app` (uses your Apple Development certificate if you have one, otherwise ad-hoc) |
 | Login item | `~/Library/LaunchAgents/io.github.hermes-bubble.hermeskey.plist` |
 
@@ -64,7 +64,7 @@ hermes bubble restart
 
 Note: the runtime uses a few internal Hermes modules (voice, TTS, web search); a Hermes release may occasionally require a plugin update.
 
-Safety model: the bubble's agent may **look** (screen, web) but never clicks or types on its own. Only the fixed actions in `runtime/actions.py` change anything, and they run outside the agent's tools.
+Safety model: the bubble's prompt tells the agent it may **look** (screen, web) but must never click or type, and to request one of the fixed actions in `runtime/actions.py` instead, which run outside the agent's tools. This is a prompt rule, not a sandbox: `computer_use` stays fully enabled for the API server, so a web page or on-screen text written to mislead the model could still make it act. Keep that in mind when you ask it to read untrusted content.
 
 Conversations: one Hermes session per bubble conversation; a new one starts when you click ✕, after 10 minutes of silence, or after 30 turns. The worker restarts itself every 6 h (when idle) and HermesKey respawns it if it dies.
 
@@ -78,7 +78,7 @@ hermes bubble uninstall [--purge]
 hermes plugins remove hermes-bubble
 ```
 
-Logs: `~/.hermes/bubble/ask.log` (turns + timings), `~/.hermes/bubble/fnkey.log` (key + app).
+Logs: `~/.hermes/bubble/ask.log` (turns + timings), `~/.hermes/bubble/fnkey.log` (key + app). Each rolls over to `.1` past 2 MB.
 
 ## Privacy
 
@@ -86,11 +86,12 @@ Logs: `~/.hermes/bubble/ask.log` (turns + timings), `~/.hermes/bubble/fnkey.log`
 - What you say is sent to **your** configured Hermes model, like any Hermes chat.
 - The key listener only watches the 🌐 key's press/release (read-only event tap). It never records other keystrokes.
 - History search reads your local Chrome `History` file on demand; nothing is copied elsewhere.
+- Spotify searches and the model's web answers go through Hermes' web search provider. YouTube searches are fetched from youtube.com directly, without your account.
 
 ## Customise
 
 - Add instant commands: `_FAST` / `_FAST_MORE` regex tables in `runtime/actions.py`
-- Add model-triggered actions: extend `ACTION_DOC` and `run_action()` in the same file
+- Add model-triggered actions: add an entry to `ACTIONS` in the same file (the prompt text the model sees is generated from it)
 - Tune the bubble look: `HUDView` in `app/HermesKey.swift`, then `hermes bubble install` to rebuild
 
 ## License

@@ -18,8 +18,8 @@ Lifecycle (HermesKey respawns the worker whenever it exits):
 """
 import importlib.util
 import json
-import re
 import os
+import re
 import resource
 import socket
 import socketserver
@@ -47,7 +47,11 @@ IDLE_RESET = int(CFG["idle_reset_minutes"]) * 60
 spec = importlib.util.spec_from_file_location("ask", str(RUNTIME / "ask.py"))
 ask = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ask)
-log = lambda m: ask.log("[worker] " + m)
+
+
+def log(m):
+    ask.log("[worker] " + m)
+
 
 STARTED = time.time()
 _lock = threading.Lock()

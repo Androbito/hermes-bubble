@@ -141,15 +141,15 @@ def _next_recommendation(els):
 
 def media(cmd, lang):
     """cmd: pause | play | toggle | next | previous"""
-    global LAST_PLAYER
     _set_last("youtube")
     if cmd in ("play", "toggle"):
         pause_spotify_if_playing()
     pid, wid, els = _fs_player()
     if not els:
         return T(lang, "Aucune vidéo YouTube ouverte dans le navigateur.", "No YouTube video is open in the browser.")
-    btn = lambda pat: next((e for e in els if e.get("role") == "AXButton"
-                            and re.search(pat, e.get("label") or "", re.I)), None)
+    def btn(pat):
+        return next((e for e in els if e.get("role") == "AXButton"
+                     and re.search(pat, e.get("label") or "", re.I)), None)
     if cmd in ("pause", "play", "toggle"):
         b = next((e for e in els if _is_playpause(e)), None)
         if not b:
@@ -199,13 +199,12 @@ def now_playing(lang):
 _LAST_FILE = DATA / "last_player"
 
 
-class _Last:
+def _last_player():
     """What the user controlled last ('spotify' | 'youtube'), persisted across worker restarts."""
-    def __get__(self, *a):
-        try:
-            return _LAST_FILE.read_text().strip() or None
-        except OSError:
-            return None
+    try:
+        return _LAST_FILE.read_text().strip() or None
+    except OSError:
+        return None
 
 
 def _set_last(p):
@@ -214,8 +213,6 @@ def _set_last(p):
     except OSError:
         pass
 
-
-LAST_PLAYER = None
 
 
 def _spotify_user():
@@ -279,7 +276,6 @@ def pause_spotify_if_playing():
 
 
 def spotify_media(cmd, lang):
-    global LAST_PLAYER
     if not spotify_running():
         if cmd in ("play", "toggle"):
             _spotify_launch()
@@ -327,7 +323,6 @@ def _spotify_search_uri(query):
 
 
 def spotify_search(query, lang):
-    global LAST_PLAYER
     uri, kind = _spotify_search_uri(query)
     if not uri:
         _spotify_launch()
@@ -342,7 +337,6 @@ def spotify_search(query, lang):
 
 
 def spotify_library_shuffle(lang):
-    global LAST_PLAYER
     user = _spotify_user()
     if not user:
         return T(lang, "Je ne trouve pas ton compte Spotify.", "I can't find your Spotify account.")
@@ -374,7 +368,7 @@ def pick_player(text=""):
             return "youtube"
     except Exception:
         pass
-    last = _Last().__get__()
+    last = _last_player()
     if last:
         return last
     return "spotify" if spotify_state() == "paused" else "youtube"
@@ -387,7 +381,6 @@ def any_media(cmd, lang, text=""):
 # ── YouTube: search & history ────────────────────────────────────────────────
 
 def play_url(url):
-    global LAST_PLAYER
     pause_spotify_if_playing()
     _set_last("youtube")
     chrome_open(url)
@@ -533,7 +526,8 @@ def open_website(site, lang):
 # ── System ───────────────────────────────────────────────────────────────────
 
 def volume(cmd, lang, value=None):
-    osa = lambda s: subprocess.run(["osascript", "-e", s], capture_output=True, text=True).stdout.strip()
+    def osa(script):
+        return subprocess.run(["osascript", "-e", script], capture_output=True, text=True).stdout.strip()
     cur = int(osa("output volume of (get volume settings)") or 50)
     if cmd == "mute":
         osa("set volume with output muted")
@@ -558,11 +552,17 @@ def timer(seconds, label, lang, notify, say):
         return None
 
     def ring():
-        msg = T(lang, f"Le minuteur {label} est terminé." if label else "Le minuteur est terminé.",
-                f"Your {label} timer is done." if label else "Your timer is done.")
-        subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"])
-        notify(msg)
-        say(msg)
+        try:
+            msg = T(lang, f"Le minuteur {label} est terminé." if label else "Le minuteur est terminé.",
+                    f"Your {label} timer is done." if label else "Your timer is done.")
+            try:
+                subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"])
+            except OSError:
+                pass
+            notify(msg)
+            say(msg)
+        finally:
+            _timers.remove(t)
     t = threading.Timer(seconds, ring)
     t.daemon = True
     t.start()
@@ -662,26 +662,27 @@ def whatsapp_call(name, lang, video=False, dry_run=False):
 
 # ── Routing ──────────────────────────────────────────────────────────────────
 
-_FAST = [
+_FAST = [   # (pattern, media command when "… sur spotify/youtube" is stripped, handler)
     (r"^(?:mets?\s+(?:en\s+)?pause|pause|stop|arr[eê]te(?:\s+la\s+musique)?|pause\s+(?:the\s+)?(?:music|video)|"
-     r"stop\s+the\s+music)$", lambda m, l, c: any_media("pause", l, m.string)),
+     r"stop\s+the\s+music)$", "pause", lambda m, lang, c: any_media("pause", lang, m.string)),
     (r"^(?:play|resume|continue|reprends?|relance|joue|lecture|remets?\s+la\s+musique)$",
-     lambda m, l, c: any_media("play", l, m.string)),
+     "play", lambda m, lang, c: any_media("play", lang, m.string)),
     (r"^(?:next|skip|suivant(?:e)?|(?:chanson|vid[eé]o|musique)\s+suivante|passe(?:\s+[aà]\s+la\s+suivante)?|"
-     r"next\s+(?:song|video|track)|skip\s+(?:this\s+)?(?:song|video|track))$", lambda m, l, c: any_media("next", l, m.string)),
+     r"next\s+(?:song|video|track)|skip\s+(?:this\s+)?(?:song|video|track))$",
+     "next", lambda m, lang, c: any_media("next", lang, m.string)),
     (r"^(?:previous|pr[eé]c[eé]dent(?:e)?|(?:chanson|vid[eé]o)\s+pr[eé]c[eé]dente|previous\s+(?:song|video|track))$",
-     lambda m, l, c: any_media("previous", l, m.string)),
+     "previous", lambda m, lang, c: any_media("previous", lang, m.string)),
     (r"^(?:monte|augmente)\s+(?:le\s+)?(?:son|volume)|^(?:volume|turn\s+(?:it\s+)?)\s*up|^louder$|^plus\s+fort$",
-     lambda m, l, c: volume("up", l)),
+     None, lambda m, lang, c: volume("up", lang)),
     (r"^(?:baisse|diminue)\s+(?:le\s+)?(?:son|volume)|^(?:volume|turn\s+(?:it\s+)?)\s*down|^quieter$|^moins\s+fort$",
-     lambda m, l, c: volume("down", l)),
-    (r"^(?:coupe\s+le\s+son|mute|silence)$", lambda m, l, c: volume("mute", l)),
+     None, lambda m, lang, c: volume("down", lang)),
+    (r"^(?:coupe\s+le\s+son|mute|silence)$", None, lambda m, lang, c: volume("mute", lang)),
     (r"^(?:mets\s+)?(?:le\s+)?(?:volume|son)\s+(?:[aà]\s+)?(?P<v>\d{1,3})(?:\s*%|\s+pour\s*cent)?$|"
      r"^(?:set\s+(?:the\s+)?)?volume\s+(?:to\s+)?(?P<v2>\d{1,3})(?:\s*%|\s+percent)?$",
-     lambda m, l, c: volume("set", l, int(m.group("v") or m.group("v2")))),
-    (r"^(?:remets?\s+le\s+son|unmute)$", lambda m, l, c: volume("unmute", l)),
+     None, lambda m, lang, c: volume("set", lang, int(m.group("v") or m.group("v2")))),
+    (r"^(?:remets?\s+le\s+son|unmute)$", None, lambda m, lang, c: volume("unmute", lang)),
     (r"^(?:what'?s|what\s+is)\s+playing|^qu'?est[- ]ce\s+qui\s+(?:joue|passe)|^c'?est\s+quoi\s+cette\s+(?:chanson|musique)",
-     lambda m, l, c: now_playing(l)),
+     None, lambda m, lang, c: now_playing(lang)),
 ]
 
 
@@ -704,15 +705,15 @@ _FAST_MORE = [
     (r"^(?:(?:cr[eé]e|ouvre|fais)(?:[- ]moi)?\s+(?:un\s+)?(?:nouveau\s+)?document\s+(?:vide\s+)?(?:dans\s+|sur\s+|avec\s+)?bb\s?edit|"
      r"(?:new|create\s+(?:a\s+)?(?:new\s+)?)(?:empty\s+)?bb\s?edit\s+(?:document|doc|file)|"
      r"(?:new|create\s+(?:a\s+)?(?:new\s+)?)(?:empty\s+)?(?:document|doc|file)\s+(?:in|on)\s+bb\s?edit|"
-     r"nouveau\s+document\s+bb\s?edit)$", lambda m, l, c: bbedit_new(l)),
+     r"nouveau\s+document\s+bb\s?edit)$", lambda m, lang, c: bbedit_new(lang)),
     (r"^(?:cherche|recherche)\s+(?P<q>.+?)\s+(?:sur|dans|avec)\s+(?:google|chrome)$|"
      r"^(?:search|google|look\s+up)\s+(?P<q2>.+?)\s+(?:on|in|with)\s+(?:google|chrome)$|"
      r"^(?:search\s+(?:on\s+)?(?:google|chrome)\s+(?:for\s+)?|cherche\s+sur\s+(?:google|chrome)\s+|google\s+)(?P<q3>.+)$",
-     lambda m, l, c: chrome_search((m.group("q") or m.group("q2") or m.group("q3")).strip(), l)),
+     lambda m, lang, c: chrome_search((m.group("q") or m.group("q2") or m.group("q3")).strip(), lang)),
     (r"^(?:appelle|t[eé]l[eé]phone\s+[aà]|call)\s+(?P<n>.+?)(?:\s+(?:sur|on|via)\s+whats\s?app)?(?P<v>\s+en\s+vid[eé]o|\s+(?:on\s+)?video)?$",
-     lambda m, l, c: whatsapp_call(m.group("n").strip(), l, bool(m.group("v")))),
+     lambda m, lang, c: whatsapp_call(m.group("n").strip(), lang, bool(m.group("v")))),
     (r"^(?:ouvre|lance|d[eé]marre|open|launch|start)\s+(?:l'application\s+|l'appli\s+|l'app\s+|the\s+app\s+|app\s+)?(?P<n>[\w .'-]{2,40})$",
-     lambda m, l, c: _open_if_app(m, l)),
+     lambda m, lang, c: _open_if_app(m, lang)),
 ]
 
 
@@ -721,12 +722,12 @@ _SPOTIFY_FAST = [
      r"(?:\s+(?:sur\s+)?spotify)?(?:\s+(?:et\s+)?(?:joue|lance|mets)?\s*(?:au\s+hasard|en\s+al[eé]atoire|en\s+shuffle|al[eé]atoirement))?$|"
      r"^(?:open|play|shuffle)\s+my\s+(?:spotify\s+)?(?:library|liked\s+songs)(?:\s+on\s+spotify)?(?:\s+(?:and\s+)?(?:play\s+)?(?:randomly|on\s+shuffle|shuffled|at\s+random))?$|"
      r"^(?:shuffle|al[eé]atoire)\s+(?:sur\s+|on\s+)?spotify$|^(?:joue|mets|lance)\s+(?:du\s+)?spotify\s+(?:au\s+hasard|en\s+al[eé]atoire)$",
-     lambda m, l, c: spotify_library_shuffle(l)),
+     lambda m, lang, c: spotify_library_shuffle(lang)),
     (r"^(?:cherche|recherche|mets|met|lance|joue|trouve)(?:[- ]moi)?\s+(?:sur|dans)\s+spotify\s+(?P<q>.+)$|"
      r"^(?:cherche|recherche|mets|met|lance|joue|trouve)(?:[- ]moi)?\s+(?P<q2>.+?)\s+(?:sur|dans)\s+spotify$|"
      r"^(?:search|play|find|put\s+on)\s+(?:on\s+|in\s+)?spotify\s+(?:for\s+)?(?P<q3>.+)$|"
      r"^(?:search(?:\s+for)?|play|find|put\s+on)\s+(?P<q4>.+?)\s+(?:on|in)\s+spotify$",
-     lambda m, l, c: spotify_search(next(g for g in m.groups() if g).strip(" ,.'\""), l)),
+     lambda m, lang, c: spotify_search(next(g for g in m.groups() if g).strip(" ,.'\""), lang)),
 ]
 
 
@@ -743,12 +744,9 @@ def fast_route(text, lang, ctx):
     raw = t
     t = _strip_player(t)
     if t != raw:                      # "pause sur spotify" → match "pause", remember the player
-        for pat, fn in _FAST:
-            m = re.match(pat, t, flags=re.I)
-            if m:
-                cmd = {0: "pause", 1: "play", 2: "next", 3: "previous"}.get(_FAST.index((pat, fn)))
-                if cmd:
-                    return any_media(cmd, lang, raw)
+        for pat, cmd, _ in _FAST:
+            if cmd and re.match(pat, t, flags=re.I):
+                return any_media(cmd, lang, raw)
         t = raw
     for pat, fn in _FAST_MORE:
         m = re.match(pat, t, flags=re.I)
@@ -756,67 +754,60 @@ def fast_route(text, lang, ctx):
             r = fn(m, lang, ctx)
             if r:
                 return r
-    for pat, fn in _FAST:
+    for pat, _, fn in _FAST:
         m = re.match(pat, t, flags=re.I)
         if m:
             return fn(m, lang, ctx)
     return None
 
 
-ACTION_DOC = """BUBBLE ACTIONS — when the user asks for one of these, do NOT use any tool; instead reply with
-exactly one line `ACTION {json}` (nothing else). Available actions:
-  {"do":"media","cmd":"pause|play|next|previous"}           control whatever is playing (Spotify or YouTube)
-  {"do":"now_playing"}                                       what is playing (Spotify or YouTube)
-  {"do":"spotify","cmd":"pause|play|next|previous"}          control Spotify
-  {"do":"spotify_search","q":"..."}                          search Spotify and play the top result
-  {"do":"spotify_library"}                                   play the user's Spotify liked songs on shuffle
-  {"do":"youtube_search","q":"..."}                          search YouTube and play the first non-ad video
-  {"do":"youtube_history","q":"..."}                         find a video in the user's watch history and play it
-  {"do":"open_app","name":"..."}                             open a Mac app by name
-  {"do":"bbedit_new"}                                        new empty BBEdit document
-  {"do":"web_search","q":"..."}                              search Google in Chrome and show results
-  {"do":"open_website","url":"..."}                          open a website in Chrome
-  {"do":"whatsapp_call","name":"...","video":false}          call a WhatsApp contact (voice or video)
-  {"do":"volume","cmd":"up|down|mute|unmute|set","value":0-100}
-  {"do":"timer","seconds":N,"label":"..."}                   countdown timer with a spoken alert
-Only use ACTION when the user clearly asks for that action; questions get normal spoken answers."""
+ACTIONS = {   # do → (example JSON for the model, description, handler(action, lang, ctx))
+    "media": ('{"do":"media","cmd":"pause|play|next|previous"}',
+              "control whatever is playing (Spotify or YouTube)",
+              lambda a, lang, ctx: any_media(a.get("cmd", "toggle"), lang)),
+    "now_playing": ('{"do":"now_playing"}', "what is playing (Spotify or YouTube)",
+                    lambda a, lang, ctx: now_playing(lang)),
+    "spotify": ('{"do":"spotify","cmd":"pause|play|next|previous"}', "control Spotify",
+                lambda a, lang, ctx: spotify_media(a.get("cmd", "toggle"), lang)),
+    "spotify_search": ('{"do":"spotify_search","q":"..."}', "search Spotify and play the top result",
+                       lambda a, lang, ctx: spotify_search(a.get("q", ""), lang)),
+    "spotify_library": ('{"do":"spotify_library"}', "play the user's Spotify liked songs on shuffle",
+                        lambda a, lang, ctx: spotify_library_shuffle(lang)),
+    "youtube_search": ('{"do":"youtube_search","q":"..."}', "search YouTube and play the first non-ad video",
+                       lambda a, lang, ctx: ctx["youtube_search"](a.get("q", ""), lang)),
+    "youtube_history": ('{"do":"youtube_history","q":"..."}', "find a video in the user's watch history and play it",
+                        lambda a, lang, ctx: youtube_history(a.get("q", ""), lang)),
+    "open_app": ('{"do":"open_app","name":"..."}', "open a Mac app by name",
+                 lambda a, lang, ctx: open_app(a.get("name", ""), lang)),
+    "bbedit_new": ('{"do":"bbedit_new"}', "new empty BBEdit document",
+                   lambda a, lang, ctx: bbedit_new(lang)),
+    "web_search": ('{"do":"web_search","q":"..."}', "search Google in Chrome and show results",
+                   lambda a, lang, ctx: chrome_search(a.get("q", ""), lang)),
+    "open_website": ('{"do":"open_website","url":"..."}', "open a website in Chrome",
+                     lambda a, lang, ctx: open_website(a.get("url", ""), lang)),
+    "whatsapp_call": ('{"do":"whatsapp_call","name":"...","video":false}', "call a WhatsApp contact (voice or video)",
+                      lambda a, lang, ctx: whatsapp_call(a.get("name", ""), lang, bool(a.get("video")))),
+    "volume": ('{"do":"volume","cmd":"up|down|mute|unmute|set","value":0-100}', "",
+               lambda a, lang, ctx: volume(a.get("cmd", "set"), lang, a.get("value"))),
+    "timer": ('{"do":"timer","seconds":N,"label":"..."}', "countdown timer with a spoken alert",
+              lambda a, lang, ctx: timer(a.get("seconds", 0), a.get("label", ""), lang, ctx["notify"], ctx["say"])),
+}
+
+ACTION_DOC = ("BUBBLE ACTIONS — when the user asks for one of these, do NOT use any tool; instead reply with\n"
+              "exactly one line `ACTION {json}` (nothing else). Available actions:\n"
+              + "\n".join(f"  {example:<58} {desc}".rstrip() for example, desc, _ in ACTIONS.values())
+              + "\nOnly use ACTION when the user clearly asks for that action; questions get normal spoken answers.")
 
 
 def run_action(a, lang, ctx):
     do = a.get("do")
+    if do not in ACTIONS:
+        return None
     try:
-        if do == "media":
-            return any_media(a.get("cmd", "toggle"), lang)
-        if do == "spotify":
-            return spotify_media(a.get("cmd", "toggle"), lang)
-        if do == "spotify_search":
-            return spotify_search(a.get("q", ""), lang)
-        if do == "spotify_library":
-            return spotify_library_shuffle(lang)
-        if do == "now_playing":
-            return now_playing(lang)
-        if do == "youtube_search":
-            return ctx["youtube_search"](a.get("q", ""), lang)
-        if do == "youtube_history":
-            return youtube_history(a.get("q", ""), lang)
-        if do == "open_app":
-            return open_app(a.get("name", ""), lang)
-        if do == "bbedit_new":
-            return bbedit_new(lang)
-        if do == "web_search":
-            return chrome_search(a.get("q", ""), lang)
-        if do == "open_website":
-            return open_website(a.get("url", ""), lang)
-        if do == "whatsapp_call":
-            return whatsapp_call(a.get("name", ""), lang, bool(a.get("video")))
-        if do == "volume":
-            return volume(a.get("cmd", "set"), lang, a.get("value"))
-        if do == "timer":
-            return timer(a.get("seconds", 0), a.get("label", ""), lang, ctx["notify"], ctx["say"])
+        return ACTIONS[do][2](a, lang, ctx)
     except Exception as e:
         _log(f"action {do} failed: {e}")
         return T(lang, "Désolé, cette action a échoué.", "Sorry, that action failed.")
-    return None
 
 
 def extract_actions(answer):

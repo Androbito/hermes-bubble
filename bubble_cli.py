@@ -1,5 +1,6 @@
 """`hermes bubble` — install and manage the Hermes Bubble voice assistant (macOS)."""
 import argparse
+import importlib.util as _ilu
 import json
 import os
 import platform
@@ -16,8 +17,6 @@ APP_SRC = PLUGIN_DIR / "app" / "HermesKey.swift"
 BUNDLE_ID = "io.github.hermes-bubble.hermeskey"
 AGENT_LABEL = "io.github.hermes-bubble.hermeskey"
 LAUNCH_AGENT = Path.home() / "Library/LaunchAgents" / f"{AGENT_LABEL}.plist"
-
-import importlib.util as _ilu
 
 _spec = _ilu.spec_from_file_location("hermes_bubble_config", RUNTIME / "config.py")
 bubble_config = _ilu.module_from_spec(_spec)
@@ -175,11 +174,14 @@ def enable_tools():
 
 
 def codesign_identity():
+    """Developer ID if present (survives rebuilds best), else Apple Development, else ad-hoc."""
     out = run(["security", "find-identity", "-v", "-p", "codesigning"]).stdout
+    found = {}
     for line in out.splitlines():
-        if '"Apple Development' in line or '"Developer ID Application' in line:
-            return line.split()[1]
-    return "-"
+        for kind in ("Developer ID Application", "Apple Development"):
+            if f'"{kind}' in line:
+                found.setdefault(kind, line.split()[1])
+    return found.get("Developer ID Application") or found.get("Apple Development") or "-"
 
 
 def build_app():
@@ -194,7 +196,11 @@ def build_app():
     if r.returncode != 0:
         raise SystemExit("swift build failed:\n" + r.stderr[-2000:])
     # Icon: reuse the Hermes desktop icon from the local Hermes install when available.
-    src_root = Path(run([hermes_bin(), "--print-runtime-command"]).stdout.split("sys.path.insert(0, '")[-1].split("'")[0] or ".")
+    try:
+        runtime_cmd = json.loads(run([hermes_bin(), "--print-runtime-command"]).stdout)
+        src_root = Path(bubble_config.parse_runtime_command(runtime_cmd)[1] or ".")
+    except (ValueError, IndexError):
+        src_root = Path(".")
     for cand in (src_root / "apps/desktop/assets/icon-dark.png", src_root / "assets/icon-dark.png"):
         if cand.exists():
             run(["sips", "-Z", "256", str(cand), "--out", str(res / "hermes.png")])
@@ -320,27 +326,29 @@ def cmd_restart(args):
     cmd_start(args)
 
 
+def check(good, msg_ok, msg_warn):
+    (ok if good else warn)(msg_ok if good else msg_warn)
+
+
 def cmd_status(args):
     cfg = bubble_config.load()
     say("Hermes Bubble status\n")
-    (ok if APP.exists() else warn)(f"app: {APP if APP.exists() else 'not built (run hermes bubble install)'}")
-    (ok if app_running() else warn)("HermesKey running" if app_running() else "HermesKey not running")
-    (ok if worker_ping() else warn)("voice worker responding" if worker_ping() else "voice worker not responding")
+    check(APP.exists(), f"app: {APP}", "app: not built (run hermes bubble install)")
+    check(app_running(), "HermesKey running", "HermesKey not running")
+    check(worker_ping(), "voice worker responding", "voice worker not responding")
     log = DATA / "fnkey.log"
     if log.exists():
-        lines = [l for l in log.read_text().splitlines() if "preflight listen access" in l]
+        lines = [line for line in log.read_text().splitlines() if "preflight listen access" in line]
         if lines:
-            granted = lines[-1].endswith("true")
-            (ok if granted else warn)("Input Monitoring granted" if granted else
-                                      "Input Monitoring NOT granted — see `hermes bubble install` step 1")
+            check(lines[-1].endswith("true"), "Input Monitoring granted",
+                  "Input Monitoring NOT granted — see `hermes bubble install` step 1")
     import urllib.request
     try:
         urllib.request.urlopen(cfg["api_url"].replace("/v1/chat/completions", "/health"), timeout=2)
         ok("Hermes API server reachable")
     except Exception:
         warn("Hermes API server not reachable (bubble falls back to the slower CLI path)")
-    (ok if bubble_config.cua_driver() else warn)(
-        "Cua Driver found" if bubble_config.cua_driver() else "Cua Driver missing (enable Computer Use in `hermes tools`)")
+    check(bubble_config.cua_driver(), "Cua Driver found", "Cua Driver missing (enable Computer Use in `hermes tools`)")
     say(f"\n  model: {cfg.get('model') or '(Hermes default)'}  provider: {cfg.get('provider') or '(default)'}")
     say(f"  languages: {', '.join(cfg['languages'])}   browser profile: {cfg['browser_profile']}")
     say(f"  logs: {DATA}/ask.log, {DATA}/fnkey.log")

@@ -1,0 +1,10 @@
+[tool.ruff]
+line-length = 120
+extend-exclude = [".test-data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]   # the voice-command regex tables are long by nature
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
