@@ -33,6 +33,7 @@ Commands marked ⚡ run instantly without asking the AI. The others go through y
 - **Louder / quieter** ⚡ — "Monte le son" · "Baisse le volume" · "Louder" · "Turn it down"
 - **Set a level** ⚡ — "Volume à 40" · "Set volume to 60"
 - **Mute / unmute** ⚡ — "Coupe le son" · "Remets le son" · "Mute"
+- If your sound goes through a monitor (HDMI/DisplayPort), macOS can't change its volume, so the bubble adjusts Spotify's own volume instead when Spotify is open.
 
 ## 🖥️ Apps & documents
 

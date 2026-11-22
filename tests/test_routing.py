@@ -145,3 +145,40 @@ def test_hermes_bin_falls_back_to_known_locations(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HERMES_CANDIDATES", (str(fake),))
     monkeypatch.setattr(config.shutil, "which", lambda name: None)
     assert config.load()["hermes_bin"] == str(fake)
+
+
+class _Osa:
+    """Fake osascript: records scripts, answers volume queries."""
+    def __init__(self, system="missing value", spotify="70"):
+        self.system, self.spotify, self.calls = system, spotify, []
+
+    def __call__(self, cmd, **kw):
+        s = cmd[-1]
+        self.calls.append(s)
+        out = self.system if "get volume settings" in s else self.spotify if s.endswith("sound volume") else ""
+        return type("R", (), {"stdout": out, "returncode": 0})()
+
+
+def test_volume_uses_system_when_available(monkeypatch):
+    osa = _Osa(system="30")
+    monkeypatch.setattr(actions.subprocess, "run", osa)
+    assert actions.volume("up", "en") == "Volume at 45 percent."
+    assert osa.calls[-1] == "set volume output volume 45 without output muted"
+
+
+def test_volume_falls_back_to_spotify_on_monitor_output(monkeypatch):
+    osa = _Osa()
+    monkeypatch.setattr(actions.subprocess, "run", osa)
+    monkeypatch.setattr(actions, "spotify_running", lambda: True)
+    monkeypatch.setattr(actions, "spotify_state", lambda: "playing")
+    assert actions.volume("set", "fr", 40) == "Volume de Spotify à 40 pour cent."
+    assert osa.calls[-1] == 'tell application "Spotify" to set sound volume to 40'
+    assert actions.volume("mute", "en") == "Muted."
+    assert actions.volume("unmute", "en") == "Unmuted."
+    assert osa.calls[-1] == 'tell application "Spotify" to set sound volume to 70'
+
+
+def test_volume_explains_when_nothing_can_be_controlled(monkeypatch):
+    monkeypatch.setattr(actions.subprocess, "run", _Osa())
+    monkeypatch.setattr(actions, "spotify_running", lambda: False)
+    assert "doesn't let the Mac change its volume" in actions.volume("set", "en", 40)

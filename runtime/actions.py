@@ -526,21 +526,67 @@ def open_website(site, lang):
 # ── System ───────────────────────────────────────────────────────────────────
 
 def volume(cmd, lang, value=None):
+    """System volume; falls back to Spotify's own volume when the output device (HDMI/DisplayPort
+    monitor, some USB DACs) has no software volume — macOS then reports 'missing value'."""
     def osa(script):
         return subprocess.run(["osascript", "-e", script], capture_output=True, text=True).stdout.strip()
-    cur = int(osa("output volume of (get volume settings)") or 50)
-    if cmd == "mute":
-        osa("set volume with output muted")
-        return T(lang, "Son coupé.", "Muted.")
-    if cmd == "unmute":
-        osa("set volume without output muted")
-        return T(lang, "Son remis.", "Unmuted.")
+
+    def as_int(s):
+        try:
+            return int(float(s))
+        except (TypeError, ValueError):
+            return None
+
+    cur = as_int(osa("output volume of (get volume settings)"))
+    target = "system"
+    if cur is None:   # the Mac can't set this device's volume
+        if spotify_running() and spotify_state() in ("playing", "paused"):
+            target = "spotify"
+            cur = as_int(osa('tell application "Spotify" to sound volume'))
+            if cur is None:
+                cur = 50
+        else:
+            return T(lang, "Cette sortie audio ne permet pas de régler le volume depuis le Mac. "
+                           "Utilise les boutons de l'écran ou des enceintes.",
+                     "This audio output doesn't let the Mac change its volume. "
+                     "Use the buttons on your display or speakers.")
+    if cmd in ("mute", "unmute"):
+        if target == "system":
+            osa(f"set volume {'with' if cmd == 'mute' else 'without'} output muted")
+        elif cmd == "mute":
+            _set_file(_SPOTIFY_VOL_FILE, str(cur))
+            osa('tell application "Spotify" to set sound volume to 0')
+        else:
+            prev = as_int(_get_file(_SPOTIFY_VOL_FILE)) or 50
+            osa(f'tell application "Spotify" to set sound volume to {prev}')
+        return T(lang, "Son coupé." if cmd == "mute" else "Son remis.", "Muted." if cmd == "mute" else "Unmuted.")
     new = {"up": min(100, cur + 15), "down": max(0, cur - 15)}.get(cmd, value)
+    new = as_int(new)
     if new is None:
         return None
-    new = max(0, min(100, int(new)))
-    osa(f"set volume output volume {new} without output muted")
-    return T(lang, f"Volume à {new} pour cent.", f"Volume at {new} percent.")
+    new = max(0, min(100, new))
+    if target == "system":
+        osa(f"set volume output volume {new} without output muted")
+        return T(lang, f"Volume à {new} pour cent.", f"Volume at {new} percent.")
+    osa(f'tell application "Spotify" to set sound volume to {new}')
+    return T(lang, f"Volume de Spotify à {new} pour cent.", f"Spotify volume at {new} percent.")
+
+
+_SPOTIFY_VOL_FILE = DATA / "spotify_volume"
+
+
+def _get_file(p):
+    try:
+        return p.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _set_file(p, v):
+    try:
+        p.write_text(v)
+    except OSError:
+        pass
 
 
 _timers = []
