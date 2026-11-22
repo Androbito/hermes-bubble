@@ -5,7 +5,9 @@ Everything user-specific lives in $HERMES_HOME/bubble/config.json (created by
 """
 import json
 import os
+import re
 import shutil
+import sys
 from pathlib import Path
 
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
@@ -31,6 +33,16 @@ DEFAULTS = {
     "hermes_bin": "",              # filled in by the installer
 }
 
+# Where `hermes` usually lives when PATH is minimal (LaunchAgent, Terminal without a profile).
+HERMES_CANDIDATES = ("/opt/homebrew/bin/hermes", "/usr/local/bin/hermes")
+
+
+def _hermes_bin(configured):
+    for c in (configured, shutil.which("hermes"), *HERMES_CANDIDATES):
+        if c and os.path.exists(c):
+            return c
+    return "hermes"
+
 
 def load():
     cfg = dict(DEFAULTS)
@@ -38,8 +50,7 @@ def load():
         cfg.update(json.loads((DATA / "config.json").read_text()))
     except (OSError, ValueError):
         pass
-    if not cfg.get("hermes_bin") or not os.path.exists(cfg["hermes_bin"]):
-        cfg["hermes_bin"] = shutil.which("hermes") or "hermes"
+    cfg["hermes_bin"] = _hermes_bin(cfg.get("hermes_bin"))
     return cfg
 
 
@@ -58,3 +69,15 @@ def cua_driver():
         if p.exists():
             return str(p)
     return shutil.which("cua-driver")
+
+
+def parse_runtime_command(cmd):
+    """(python, src_root) from the JSON list printed by `hermes --print-runtime-command`:
+    [python, -I, -c, "...sys.path.insert(0, '<src>')..."]"""
+    m = re.search(r"sys\.path\.insert\(0, '([^']+)'\)", " ".join(cmd))
+    return cmd[0], (m.group(1) if m else "")
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["runtime-command"]:
+    # launch.sh: `hermes --print-runtime-command | python3 config.py runtime-command` → python, src_root
+    print("\n".join(parse_runtime_command(json.load(sys.stdin))))

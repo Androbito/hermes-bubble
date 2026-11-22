@@ -13,20 +13,20 @@ except Exception: print("")' "$DATA/config.json")"
 [ -x "$HERMES" ] || HERMES="$(command -v hermes)"
 if [ -z "$HERMES" ]; then echo "hermes not found" >> "$DATA/$SCRIPT.out"; exit 1; fi
 
-# `hermes --print-runtime-command` → [python, -I, -c, "...sys.path.insert(0, '<src>')..."]
-read -r PY SRC < <("$HERMES" --print-runtime-command 2>/dev/null | /usr/bin/python3 -c '
-import json, re, sys
-cmd = json.load(sys.stdin)
-m = re.search(r"sys\.path\.insert\(0, \x27([^\x27]+)\x27\)", " ".join(cmd))
-print(cmd[0], m.group(1) if m else "")')
+# `hermes --print-runtime-command` → JSON [python, -I, -c, "...sys.path.insert(0, '<src>')..."]
+{ read -r PY; read -r SRC; } < <("$HERMES" --print-runtime-command 2>/dev/null \
+                                 | /usr/bin/python3 "$RUNTIME/config.py" runtime-command)
+if [ -z "$PY" ]; then echo "could not read the Hermes runtime from $HERMES" >> "$DATA/$SCRIPT.out"; exit 1; fi
 
-exec "$PY" -I -c "
+# Paths travel as environment variables, never pasted into the Python source.
+HB_SRC="$SRC" HB_RUNTIME="$RUNTIME" HB_SCRIPT="$SCRIPT" exec "$PY" -I -c '
 import os, sys, runpy
-for k in ('PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV'): os.environ.pop(k, None)
-sys.path.insert(0, '$SRC')
+for k in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"): os.environ.pop(k, None)
+sys.path.insert(0, os.environ["HB_SRC"])
 sys._hermes_pin_default_home = True
 import hermes_bootstrap
-os.environ.setdefault('HERMES_HOME', str(__import__('hermes_constants').get_default_hermes_root()))
-sys.path.insert(0, '$RUNTIME')
-runpy.run_path('$RUNTIME/$SCRIPT.py', run_name='__main__')
-" >> "$DATA/$SCRIPT.out" 2>&1
+os.environ.setdefault("HERMES_HOME", str(__import__("hermes_constants").get_default_hermes_root()))
+runtime = os.environ["HB_RUNTIME"]
+sys.path.insert(0, runtime)
+runpy.run_path(os.path.join(runtime, os.environ["HB_SCRIPT"] + ".py"), run_name="__main__")
+' >> "$DATA/$SCRIPT.out" 2>&1

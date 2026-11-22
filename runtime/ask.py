@@ -28,16 +28,22 @@ CONV = BASE / "conv.open"
 NOTIFY = BASE / "notify.json"
 SESSION = BASE / "session.json"
 LOG = BASE / "ask.log"
+LOG_MAX_BYTES = 2_000_000   # ask.log is renamed to ask.log.1 past this size
 CONTINUE_WINDOW = int(CFG["idle_reset_minutes"]) * 60   # follow-ups continue the same conversation
 NO_SPEECH_TIMEOUT = 8       # give up if nothing is said
 MAX_RECORD = 60
 LEVEL_FULL_SCALE = 2500.0   # mic RMS that maps to a full HUD waveform
 VOICE_MODEL = CFG.get("model") or ""          # "" = your Hermes default model
 VOICE_PROVIDER = CFG.get("provider") or ""
-HERMES = CFG["hermes_bin"]
+HERMES = CFG["hermes_bin"]   # resolved by config.load(): config, PATH, then the usual Homebrew spots
 
 
 def log(msg):
+    try:
+        if LOG.stat().st_size > LOG_MAX_BYTES:
+            os.replace(LOG, LOG.with_name(LOG.name + ".1"))
+    except OSError:
+        pass
     with open(LOG, "a") as f:
         f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
 
@@ -47,12 +53,6 @@ def set_state(state, level=0.0, text=""):
     tmp.write_text(json.dumps({"state": state, "level": round(level, 3), "text": text[:3000],
                                "ts": time.time()}))
     os.replace(tmp, STATE)   # atomic: the HUD never reads a half-written file
-
-
-def notify(title, text):
-    text = text.replace('"', "'").replace("\\", "")[:220]
-    subprocess.run(["osascript", "-e", f'display notification "{text}" with title "{title}"'],
-                   capture_output=True)
 
 
 def acquire_lock():
@@ -70,13 +70,6 @@ def acquire_lock():
         sys.exit(0)
     PIDF.write_text(str(os.getpid()))
     return fh
-
-
-def hermes_bin():
-    for c in (HERMES, "/opt/homebrew/bin/hermes", "/usr/local/bin/hermes"):
-        if os.path.exists(c):
-            return c
-    return "hermes"
 
 
 VOICE_PREFIX = ("[Voice input — the user is speaking to you via a push-to-talk key on their Mac and "
@@ -105,7 +98,7 @@ def lang_hint():
 
 def ask_hermes(text):
     prefix = VOICE_PREFIX + lang_hint()
-    cmd = [hermes_bin(), "chat", "-Q", "--no-restore-cwd"]
+    cmd = [HERMES, "chat", "-Q", "--no-restore-cwd"]
     if VOICE_PROVIDER:
         cmd += ["--provider", VOICE_PROVIDER]
     if VOICE_MODEL:
@@ -130,8 +123,8 @@ def ask_hermes(text):
         SESSION.write_text(json.dumps({"id": m.group(1), "ts": time.time()}))
         out = re.sub(r"^session_id:\s*\S+\s*$", "", out, flags=re.M)
     # Drop CLI housekeeping lines (cwd-restore notices etc.) so they're never spoken.
-    out = "\n".join(l for l in out.splitlines()
-                    if not re.match(r"^\s*(↪|⚠)\s", l) and "restored workspace dir" not in l)
+    out = "\n".join(line for line in out.splitlines()
+                    if not re.match(r"^\s*(↪|⚠)\s", line) and "restored workspace dir" not in line)
     out = out.strip()
     if p.returncode != 0 and not out:
         log(f"hermes rc={p.returncode} stderr={p.stderr[-500:]}")
@@ -140,8 +133,8 @@ def ask_hermes(text):
 
 
 SILENCE_END_SECONDS = float(CFG["silence_seconds"])   # pause that ends your question
-VOICE_LANGS = ("fr", "en", "ar")
-LAST_LANG = "fr"   # languages the user speaks; auto-detect is limited to these
+VOICE_LANGS = tuple(CFG["languages"]) or ("en",)   # auto-detect is limited to these
+LAST_LANG = VOICE_LANGS[0]                            # first configured language = fallback
 VOICE_STT_MODEL = CFG["stt_model"]
 
 
@@ -164,7 +157,7 @@ def transcribe(vm, wav):
         audio = decode_audio(wav, sampling_rate=16000)[: 16000 * 10]
         _, _, probs = model.detect_language(audio)
         scores = dict(probs or [])
-        lang = max(VOICE_LANGS, key=lambda l: scores.get(l, 0.0))
+        lang = max(VOICE_LANGS, key=lambda code: scores.get(code, 0.0))
         res = tt._transcribe_local(wav, VOICE_STT_MODEL, language=lang)
         text = (res.get("transcript") or "").strip()
         if res.get("success") and text and not vm.is_whisper_hallucination(text):

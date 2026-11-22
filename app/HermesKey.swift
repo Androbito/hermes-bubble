@@ -28,9 +28,15 @@ let pidPath = base + "/ask.pid"
 let convPath = base + "/conv.open"      // exists while the bubble/conversation is open
 let notifyPath = base + "/notify.json"  // ask.py drops each answer here → clickable notification
 
+let LOG_MAX_BYTES: UInt64 = 2_000_000   // fnkey.log is renamed to fnkey.log.1 past this size
+
 func log(_ s: String) {
     let line = "\(Date()) \(s)\n"
     let path = base + "/fnkey.log"
+    if let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? UInt64, size > LOG_MAX_BYTES {
+        try? FileManager.default.removeItem(atPath: path + ".1")
+        try? FileManager.default.moveItem(atPath: path, toPath: path + ".1")
+    }
     if let h = FileHandle(forWritingAtPath: path) {
         h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile()
     } else {
@@ -173,7 +179,7 @@ final class HUD {
     var visible = false
     var lastText = "", lastState = ""
     init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 82),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: HUD_WIDTH, height: 82),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -312,20 +318,18 @@ func askAlive() -> Bool {
 }
 
 func pollState() {
-    var st = "idle", lvl = 0.0, txt = "", ts = 0.0
+    var st = "idle", lvl = 0.0, txt = ""
     if let d = FileManager.default.contents(atPath: statePath),
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
         st = j["state"] as? String ?? "idle"
         lvl = (j["level"] as? Double) ?? 0
         txt = j["text"] as? String ?? ""
-        ts = (j["ts"] as? Double) ?? 0
     }
     // "starting" is shown locally on the key press until ask.py reports in.
     if model.state == "starting" && st == "idle" {
         if Date().timeIntervalSince(model.lastChange) > 8 { model.state = "idle"; hud.hide() }
         return
     }
-    _ = ts
     // New answer from ask.py → clickable notification (click → continue in Terminal).
     if let d = FileManager.default.contents(atPath: notifyPath),
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
@@ -513,11 +517,14 @@ if let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventT
 } else {
     log("could not create event tap — grant Input Monitoring to HermesKey")
 }
-Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in pollState() }
-ensureWorker()
-Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-    DispatchQueue.global().async { DispatchQueue.main.async { ensureWorker() } }
+// 30 Hz drives the waveform while the bubble is up; idle, 2 Hz is plenty to notice a timer alert.
+var pollTick = 0
+Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
+    pollTick += 1
+    if hud.visible || model.state != "idle" || pollTick % 15 == 0 { pollState() }
 }
+ensureWorker()
+Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in ensureWorker() }
 NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
     workerProc?.terminate()
 }
