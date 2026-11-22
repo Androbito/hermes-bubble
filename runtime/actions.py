@@ -620,6 +620,14 @@ def timer(seconds, label, lang, notify, say):
 
 
 # ── WhatsApp calls ───────────────────────────────────────────────────────────
+#
+# Order (same as doing it by hand):
+#   1. Calls tab: if the spoken name matches someone in Favorites / Recent, use that exact name
+#      (this also rescues slightly misheard names: "Sara" → "Sarah").
+#   2. Type the name in the Calls search box ("Name, number, @username"). WhatsApp lists the
+#      matching contacts, each followed by its own "Start voice call" / "Start video call"
+#      buttons, so the call is placed from an explicit button, never from an ambiguous row.
+#   3. Last resort: open the chat from the Chats tab and use the chat header's call button.
 
 def _wa_window():
     subprocess.run(["open", "-a", "WhatsApp"])
@@ -635,27 +643,94 @@ def _wa_window():
 
 _ROW_HINT = re.compile(r"(message|sent to|received|reacted|voice call|video call|photo|missed|typing|"
                        r"\d{1,2}:\d{2}|yesterday|hier)", re.I)
+_CALL_ROW = re.compile(r"\b(incoming|outgoing|entrant|sortant)\b", re.I)
+
+
+def _name_score(target, label):
+    lab = norm(label)
+    if not lab:
+        return 0.0
+    if lab == target:
+        return 1.0
+    score = difflib.SequenceMatcher(None, target, lab).ratio()
+    if lab.startswith(target + " ") or target.startswith(lab + " "):
+        score = max(score, 0.85)
+    return score
 
 
 def _contact_button(els, name):
     """Chat-list row (Chats tab only) whose contact name best matches the spoken name.
-    Rows are AXButtons whose value carries the last-message summary; this excludes
-    'Follow …' channel suggestions, tabs and toolbar buttons."""
+    Rows are AXButtons whose value carries the last-message summary; the currently open chat
+    shows up as AXStaticText. Excludes 'Follow …' channel suggestions, tabs and toolbar buttons."""
     target = norm(name)
     best, best_score = None, 0.0
     for e in els:
-        if e.get("role") != "AXButton":
+        if e.get("role") not in ("AXButton", "AXStaticText"):
             continue
         lab = norm(e.get("label") or "")
         val = (e.get("value") or "").replace("\u200e", "")
         if not lab or not _ROW_HINT.search(val) or lab.startswith(("follow", "suivre", "start ", "demarrer")):
             continue
-        score = 1.0 if lab == target else difflib.SequenceMatcher(None, target, lab).ratio()
-        if lab.startswith(target + " ") or target.startswith(lab + " "):
-            score = max(score, 0.85)
+        score = _name_score(target, e.get("label"))
         if score > best_score:
             best, best_score = e, score
     return (best, best_score) if best_score >= 0.8 else (None, best_score)
+
+
+def _known_caller(els, name):
+    """Exact display name of a Favorites / Recent entry in the Calls tab matching `name`."""
+    target = norm(name)
+    best, best_score = None, 0.0
+    in_favorites = False
+    for e in els:
+        role, lab = e.get("role"), (e.get("label") or "").replace("\u200e", "").strip()
+        if role == "AXHeading":
+            in_favorites = norm(lab) in ("favorites", "favoris")
+            continue
+        is_recent = role == "AXButton" and _CALL_ROW.search(e.get("value") or "")
+        is_fav = in_favorites and role == "AXStaticText"
+        if not (is_recent or is_fav):
+            continue
+        score = _name_score(target, lab)
+        if score > best_score:
+            best, best_score = lab, score
+    return best if best_score >= 0.75 else None
+
+
+def _search_results(els):
+    """[(name, voice_button, video_button)] from the Contacts section of a Calls-tab search."""
+    out, in_contacts, cur = [], False, None
+    for e in els:
+        role, lab = e.get("role"), (e.get("label") or "").replace("\u200e", "").strip()
+        if role == "AXHeading":
+            if lab:
+                in_contacts = norm(lab) in ("contacts", "contact")
+            continue
+        if not in_contacts:
+            continue
+        if role == "AXStaticText" and lab:
+            cur = [lab, None, None]
+            out.append(cur)
+        elif role == "AXButton" and cur is not None:
+            if re.match(r"^(start voice call|appel vocal|d[eé]marrer un appel vocal)", lab, re.I):
+                cur[1] = e
+            elif re.match(r"^(start video call|appel vid[eé]o|d[eé]marrer un appel vid[eé]o)", lab, re.I):
+                cur[2] = e
+    return [tuple(r) for r in out]
+
+
+def _pick_result(results, name):
+    """Best search result for the spoken name → ((name, voice, video), None) or (None, why)."""
+    if not results:
+        return None, "none"
+    target = norm(name)
+    scored = sorted(((_name_score(target, r[0]), r) for r in results), key=lambda x: -x[0])
+    top_score, top = scored[0]
+    if top_score == 1.0 or len(scored) == 1:
+        return top, None
+    if top_score - scored[1][0] < 0.05:      # two people match about equally → ask
+        return None, f"ambiguous:{top[0]}|{scored[1][1][0]}"
+    return top, None
 
 
 def _wa_tab(pid, wid, els, tab="Chats"):
@@ -668,26 +743,68 @@ def _wa_tab(pid, wid, els, tab="Chats"):
     return els
 
 
-def whatsapp_call(name, lang, video=False, dry_run=False):
-    pid, wid = _wa_window()
-    if not pid:
-        return T(lang, "WhatsApp ne répond pas.", "WhatsApp isn't responding.")
-    # Always work from the Chats tab: clicking a row in the Calls tab could dial immediately.
+def _wa_clear_search(pid, els):
+    b = next((e for e in els if e.get("role") == "AXButton" and norm(e.get("label") or "") == "clear text"), None)
+    if b:
+        click(pid, b["element_token"])
+
+
+def _calling(lang, who, video):
+    return T(lang, f"J'appelle {who} sur WhatsApp{' en vidéo' if video else ''}.",
+             f"Calling {who} on WhatsApp{' (video)' if video else ''}.")
+
+
+def _calls_search_field(els):
+    """The Calls tab's "Name, number, @username" box (the Chats tab has no AX text field)."""
+    return next((e for e in els if e.get("role") in ("AXTextField", "AXSearchField")), None)
+
+
+def _call_from_calls_tab(pid, wid, name, lang, video, dry_run):
+    """Steps 1-2. Returns a reply, or None to fall through to the Chats tab."""
+    els = elements(pid, wid)
+    field = _calls_search_field(els)
+    if not field:                            # not on the Calls tab yet (each click costs ~2.5 s)
+        els = _wa_tab(pid, wid, els, "Calls")
+        field = _calls_search_field(els)
+    if not field:
+        return None
+    query = _known_caller(els, name) or name
+    # set_value replaces any previous search and triggers WhatsApp's live search; it is ~2x
+    # faster than focusing the field and typing.
+    cua("set_value", {"pid": pid, "element_token": field["element_token"], "value": query})
+    results = []
+    for _ in range(6):                       # results appear as you type; give WhatsApp ~2 s
+        time.sleep(0.35)
+        els = elements(pid, wid)
+        results = _search_results(els)
+        if results:
+            break
+    pick, why = _pick_result(results, query)
+    if not pick:
+        _wa_clear_search(pid, els)
+        if why and why.startswith("ambiguous:"):
+            a, b = why.split(":", 1)[1].split("|")
+            return T(lang, f"J'ai trouvé {a} et {b}. Lequel veux-tu appeler ?",
+                     f"I found {a} and {b}. Which one should I call?")
+        return None
+    who, voice_btn, video_btn = pick
+    btn = video_btn if video else voice_btn
+    if not btn:
+        _wa_clear_search(pid, els)
+        return None
+    if dry_run:
+        _wa_clear_search(pid, els)
+        return f"DRY RUN (calls tab, query {query!r}): would click '{btn.get('label')}' for {who}"
+    click(pid, btn["element_token"])
+    return _calling(lang, who, video)
+
+
+def _call_from_chats_tab(pid, wid, name, lang, video, dry_run):
+    """Step 3: open the chat and use the header's 'Start voice/video call with …' button."""
     els = _wa_tab(pid, wid, elements(pid, wid), "Chats")
     btn, _ = _contact_button(els, name)
     if not btn:
-        field = next((e for e in els if e.get("role") in ("AXTextField", "AXSearchField")), None)
-        if not field:
-            return T(lang, f"Je ne trouve pas {name} dans WhatsApp.", f"I can't find {name} in WhatsApp.")
-        click(pid, field["element_token"])
-        cua("type_text", {"pid": pid, "element_token": field["element_token"], "text": name})
-        time.sleep(1.5)
-        els = elements(pid, wid)
-        btn, _ = _contact_button(els, name)
-        if not btn:
-            cua("set_value", {"pid": pid, "element_token": field["element_token"], "value": ""})
-    if not btn:
-        return T(lang, f"Je ne trouve pas {name} dans WhatsApp.", f"I can't find {name} in WhatsApp.")
+        return None
     who = (btn.get("label") or name).replace("\u200e", "").strip()
     click(pid, btn["element_token"])
     time.sleep(1.2)
@@ -700,10 +817,27 @@ def whatsapp_call(name, lang, video=False, dry_run=False):
         return T(lang, f"J'ai ouvert la conversation avec {who}, mais je ne trouve pas le bouton d'appel.",
                  f"I opened the chat with {who}, but can't find the call button.")
     if dry_run:
-        return f"DRY RUN: would click '{(call_btn.get('label') or '').strip()}'"
+        return f"DRY RUN (chats tab): would click '{(call_btn.get('label') or '').strip()}'"
     click(pid, call_btn["element_token"])
-    return T(lang, f"J'appelle {who} sur WhatsApp{' en vidéo' if video else ''}.",
-             f"Calling {who} on WhatsApp{' (video)' if video else ''}.")
+    return _calling(lang, who, video)
+
+
+def whatsapp_call(name, lang, video=False, dry_run=False):
+    name = (name or "").strip(" .,!?")
+    if not name:
+        return T(lang, "Qui veux-tu appeler ?", "Who should I call?")
+    pid, wid = _wa_window()
+    if not pid:
+        return T(lang, "WhatsApp ne répond pas.", "WhatsApp isn't responding.")
+    for step in (_call_from_calls_tab, _call_from_chats_tab):
+        try:
+            r = step(pid, wid, name, lang, video, dry_run)
+        except Exception as e:               # one broken step must not hide the other
+            _log(f"whatsapp {step.__name__} failed: {e}")
+            r = None
+        if r:
+            return r
+    return T(lang, f"Je ne trouve pas {name} dans WhatsApp.", f"I can't find {name} in WhatsApp.")
 
 
 # ── Routing ──────────────────────────────────────────────────────────────────

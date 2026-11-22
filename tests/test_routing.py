@@ -216,3 +216,62 @@ def test_say_fallback_uses_a_voice_for_the_language(monkeypatch):
     spoken = [c for c in calls if c[:3] != ["say", "-v", "?"]]
     assert spoken == [["say", "-v", "Aurélie (Enhanced)", "Bonjour"], ["say", "-v", "Majed (Premium)", "مرحبا"],
                       ["say", "Hallo"]]
+
+
+# WhatsApp Calls tab, as cua-driver sees it (invented names)
+_CALLS_TAB = [
+    {"role": "AXHeading", "label": "\u200eCalls"},
+    {"role": "AXTextField", "label": "\u200eName, number, @username", "element_token": "field"},
+    {"role": "AXHeading", "label": "\u200eFavorites"},
+    {"role": "AXStaticText", "label": "Karim Benali"},
+    {"role": "AXHeading", "label": "\u200eRecent"},
+    {"role": "AXButton", "label": "Sarah", "value": "\u200eOutgoing, voice, \u200e1 call, 22 November 2026 at 19:53"},
+    {"role": "AXButton", "label": "Alex Martin", "value": "\u200eIncoming, video, missed, \u200e1 call, 21 November"},
+    {"role": "AXButton", "label": "\u200eStart call"},
+]
+
+
+def test_known_caller_uses_recent_and_favorites_and_tolerates_mishearing():
+    assert actions._known_caller(_CALLS_TAB, "Sara") == "Sarah"
+    assert actions._known_caller(_CALLS_TAB, "karim benali") == "Karim Benali"
+    assert actions._known_caller(_CALLS_TAB, "Alex") == "Alex Martin"
+    assert actions._known_caller(_CALLS_TAB, "Start call") is None      # toolbar buttons are not people
+    assert actions._known_caller(_CALLS_TAB, "Nadia") is None
+
+
+def _results(*names):
+    els = [{"role": "AXTextField", "label": "Sa"}, {"role": "AXButton", "label": "Clear text"},
+           {"role": "AXHeading", "label": ""}, {"role": "AXHeading", "label": "\u200eContacts"}]
+    for n in names:
+        els += [{"role": "AXStaticText", "label": n},
+                {"role": "AXButton", "label": "\u200eStart voice call", "element_token": f"voice-{n}"},
+                {"role": "AXButton", "label": "\u200eStart video call", "element_token": f"video-{n}"}]
+    return els + [{"role": "AXHeading", "label": ""}, {"role": "AXHeading", "label": "\u200eCalls"},
+                  {"role": "AXButton", "label": "Sarah", "value": "Outgoing, voice"}]
+
+
+def test_search_results_pair_each_contact_with_its_own_call_buttons():
+    res = actions._search_results(_results("Sarah", "Sarah Lopez"))
+    assert [(n, v["element_token"], w["element_token"]) for n, v, w in res] == [
+        ("Sarah", "voice-Sarah", "video-Sarah"), ("Sarah Lopez", "voice-Sarah Lopez", "video-Sarah Lopez")]
+
+
+def test_pick_result_prefers_exact_name_and_asks_when_ambiguous():
+    pick, why = actions._pick_result(actions._search_results(_results("Sarah Lopez", "Sarah")), "Sarah")
+    assert pick[0] == "Sarah" and why is None
+    pick, why = actions._pick_result(actions._search_results(_results("Sam Lee", "Sam Lea")), "Sam Le")
+    assert pick is None and why.startswith("ambiguous:")
+    assert actions._pick_result([], "Sarah") == (None, "none")
+
+
+def test_whatsapp_call_goes_through_the_calls_tab(monkeypatch):
+    clicks, writes = [], []
+    snapshots = iter([_CALLS_TAB, _results("Sarah")])
+    monkeypatch.setattr(actions, "_wa_window", lambda: (1, 2))
+    monkeypatch.setattr(actions, "elements", lambda pid, wid: next(snapshots))
+    monkeypatch.setattr(actions, "click", lambda pid, tok: clicks.append(tok) or True)
+    monkeypatch.setattr(actions, "cua", lambda tool, args, timeout=20: writes.append((tool, args.get("value"))) or {})
+    monkeypatch.setattr(actions.time, "sleep", lambda s: None)
+    assert actions.whatsapp_call("Sara", "fr") == "J'appelle Sarah sur WhatsApp."
+    assert writes == [("set_value", "Sarah")]          # searched the exact name from Recent
+    assert clicks == ["voice-Sarah"]                    # and pressed that contact's own call button

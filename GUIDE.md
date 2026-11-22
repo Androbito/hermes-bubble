@@ -50,7 +50,8 @@ Commands marked ⚡ run instantly without asking the AI. The others go through y
 
 - **Voice call** ⚡ — "Appelle Sarah" · "Appelle Karim sur WhatsApp" · "Call Alex"
 - **Video call** ⚡ — "Appelle Sarah en vidéo" · "Call Alex on video"
-- Hermes finds the person in your WhatsApp chats, or searches for them, then starts the call. If no name matches closely enough, it tells you instead of guessing.
+- Hermes opens WhatsApp's **Calls** tab. If the person is in your Favorites or recent calls, it uses that exact name, even if it heard you slightly wrong ("Sara" finds Sarah). Otherwise it types the name in the Calls search box and presses that contact's own call button. As a last resort it opens the chat and calls from there.
+- If two contacts match equally well, it asks which one you mean. If nobody matches, it tells you instead of guessing.
 
 ## ⏱️ Timers
 
