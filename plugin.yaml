@@ -1,0 +1,7 @@
+name: hermes-bubble
+version: 1.0.0
+description: "Hold the 🌐 Globe key to talk to Hermes on macOS — a Siri / Google-Assistant-style voice bubble with spoken answers, YouTube & Spotify control, app launching, web search, WhatsApp calls and timers. Run `hermes bubble install` once after installing."
+author: "Androbito"
+homepage: https://github.com/Androbito/hermes-bubble
+license: MIT
+tags: [voice, macos, assistant, push-to-talk, youtube, spotify, whatsapp]
